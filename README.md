@@ -140,31 +140,6 @@ For each request:
 
 This entire sequence runs in **one Lua script** inside Redis, so concurrent requests from multiple app instances cannot interleave and overspend tokens.
 
-## Scalability strategy
-
-- Run N app instances behind a load balancer; all instances talk to the same Redis (or Redis Cluster).
-- Since the service is stateless (except Redis), horizontal scaling is straightforward.
-- Use distinct rate-limit keys for different dimensions as needed (user id, api key, route, etc.).
-
-## Failure handling strategies
-
-### Redis unavailable
-Two common modes are supported via `RL_FAILURE_MODE`:
-
-- `fail_open` (default): if Redis is down, allow requests (protects availability; sacrifices strict limiting).
-- `fail_closed`: if Redis is down, throttle with `429` (protects downstream systems; sacrifices availability).
-
-### Redis latency/timeouts
-- The Redis client uses low connect/read timeouts to avoid hanging requests.
-- Consider using connection pooling, local Redis replicas, or a regional Redis deployment close to app instances.
-
-### Hot keys
-- If many requests share the same key (e.g., one API key), that Redis key becomes hot.
-- Mitigations: shard by key design, split by route, or use Redis Cluster to distribute keys.
-
-### Clock skew
-- The limiter uses app time (`now_ms`) as input. Large clock skew across nodes can affect refill.
-- Mitigations: synchronize clocks (NTP) or use Redis server time in Lua (more complex).
 
 ## Local dev (without Docker)
 
@@ -198,3 +173,79 @@ To simulate many different clients (varies `X-Real-IP` per request):
 ```bash
 python scripts/load_test.py --requests 500 --concurrency 50 --unique-clients
 ```
+## Architecture
+
+### Token Bucket Algorithm
+
+```
+                    ┌─────────────────┐
+                    │   Token Bucket  │
+                    │  capacity: 10   │
+                    │  ●●●●●●●●●●     │ ← Tokens
+                    └────────┬────────┘
+                             │
+    Refill Rate ─────────────┤
+    (tokens/sec)             │
+                             ▼
+                    ┌─────────────────┐
+                    │    Request      │
+                    │  Token >= 1?    │
+                    └────────┬────────┘
+                             │
+              ┌──────────────┴──────────────┐
+              │                             │
+              ▼                             ▼
+        ┌──────────┐                 ┌──────────┐
+        │  ALLOW   │                 │  REJECT  │
+        │ -1 token │                 │ 429 Error│
+        └──────────┘                 └──────────┘
+```
+
+### Sliding Window Log Algorithm
+
+                    ┌─────────────────┐
+                    │   Request Log   │
+                    │ (timestamps)    │
+                    └────────┬────────┘
+                             │
+                    Remove expired entries
+                             │
+                             ▼
+                    ┌─────────────────┐
+                    │    Incoming     │
+                    │    Request      │
+                    └────────┬────────┘
+                             │
+                    ┌────────▼────────┐
+                    │ Count < Limit ? │
+                    └────────┬────────┘
+                             │
+              ┌──────────────┴──────────────┐
+              │                             │
+              ▼                             ▼
+        ┌──────────┐                 ┌──────────┐
+        │  ALLOW   │                 │  REJECT  │
+        │ Add time │                 │  429     │
+        └──────────┘                 └──────────┘
+
+### Redis Distributed Algorithm
+                    ┌─────────────────┐
+                    │   API Request   │
+                    └────────┬────────┘
+                             │
+                             ▼
+                    ┌─────────────────┐
+                    │   Redis Lua     │
+                    │   Script        │
+                    └────────┬────────┘
+                             │
+              Atomic check + update
+                             │
+              ┌──────────────┴──────────────┐
+              │                             │
+              ▼                             ▼
+        ┌──────────┐                 ┌──────────┐
+        │  ALLOW   │                 │  REJECT  │
+        │  Continue│                 │  429     │
+        └──────────┘                 └──────────┘
+
