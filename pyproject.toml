@@ -1,0 +1,20 @@
+[project]
+name = "distributed-rate-limiter"
+version = "0.1.0"
+description = "Distributed token-bucket rate limiter using Redis + Lua"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115.0",
+  "uvicorn[standard]>=0.30.0",
+  "redis>=5.0.0",
+  "pydantic-settings>=2.6.0",
+]
+
+[tool.uvicorn]
+factory = false
+
+[tool.ruff]
+line-length = 100
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

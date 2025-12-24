@@ -1,0 +1,19 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+
+  rate-limiter:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - RL_REDIS_URL=redis://redis:6379/0
+      - RL_CAPACITY=10
+      - RL_REFILL_RATE_PER_SEC=5
+      - RL_KEY_PREFIX=rl
+      - RL_FAILURE_MODE=fail_open
+    depends_on:
+      - redis
